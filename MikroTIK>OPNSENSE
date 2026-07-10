@@ -1,0 +1,64 @@
+Migração de Borda: MikroTik → OPNsense em Ambiente de Broadcast Crítico
+
+Contexto
+
+Filial regional de uma emissora de TV com dependência direta de rede para operação ao vivo: contribuição de vídeo (NDI/SRT), intercom IP, câmeras remotas, e um túnel IPsec site-to-site com a matriz para tráfego corporativo e de distribuição de sinal (NDI). Nenhuma janela de manutenção maior que alguns minutos era aceitável, e qualquer instabilidade durante uma transmissão ao vivo tinha custo real.
+
+O roteador de borda (MikroTik RB2011UiAS) concentrava: multi-WAN com balanceamento por conexão (PCC), IPsec S2S legado, e parte do DHCP local. Decisão: substituir por um appliance OPNsense, aproveitando a troca para reorganizar a arquitetura L3 do site.
+
+Escopo tecnico
+
+1. Multi-WAN com failover real
+
+
+3 links: dois dedicados (uplinks primário/secundário) + um de banda larga como backup terciário
+PCC do MikroTik → Gateway Groups no OPNsense, com balanceamento simultâneo entre os dois links primários (sticky connections) e failover em cascata pro terciário
+Monitoramento de gateway (dpinger) com métricas de RTT/loss em tempo real
+
+
+2. IPsec site-to-site com redundância de caminho
+
+
+Túnel legado IKEv1 (policy-based), PSK, seletores fixos para duas sub-redes remotas (rede corporativa + rede de distribuição de sinal)
+Migração completa preservando compatibilidade com o peer remoto (parâmetros de fase 1/2 idênticos: AES-256, SHA-1, DH Group 14, sem PFS — mantido por compatibilidade com o peer legado)
+Segunda Connection IPsec configurada sobre o segundo link físico, como caminho de contingência ativável em caso de falha do circuito primário — mesma política de tráfego, IP de origem diferente
+Ajuste fino de temporizadores (DPD, rekey, reauth) para eliminar reconexões manuais e alinhar o comportamento de auto-recuperação entre as duas pontas do túnel
+
+
+3. Redesenho de VLAN / papel do L3
+
+
+Rede antes dependia do switch de acesso para rotear entre VLAN corporativa e VLAN de voz, sem qualquer política de segmentação entre elas
+L3 da rede corporativa migrado para o firewall (ponto único de política, NAT e VPN); rede de voz mantida no switch por decisão de resiliência (acesso de gerência não pode depender do firewall estar no ar)
+Trunk 802.1Q configurado no uplink switch↔firewall para suportar o novo desenho
+
+
+4. Migração de DHCP
+
+
+Motor legado (ISC DHCP) apresentou falha de geração de configuração após conflito histórico com outro serviço na mesma interface
+Migração para Kea DHCP (motor atualmente suportado), com replicação de todas as reservas estáticas de equipamento crítico (câmeras, encoders, matriz de áudio, sistema de intercom)
+
+
+5. NAT e regras de exceção
+
+
+Outbound NAT em modo híbrido, com regras manuais de "no NAT" para o tráfego destinado às redes remotas via túnel (evitando mascaramento indevido que quebraria a política do peer remoto)
+Port-forward dedicado para o sistema de intercom IP
+
+
+Metodologia de corte
+
+
+Toda a configuração do equipamento novo foi preparada e validada antes da janela de corte
+Substituição física executada em poucos minutos, com o equipamento legado mantido energizado como rollback imediato
+Diagnóstico ponta a ponta feito via CLI (swanctl) comparando parâmetro a parâmetro entre as duas pontas do túnel sempre que uma negociação falhava — em vez de tentativa-e-erro, isolamento sistemático de qual parâmetro (proposta de criptografia, hash, seletor de rede, PFS) estava divergente
+
+
+Resultado
+
+
+Zero perda de sinal ao vivo durante o corte
+Caminho de VPN redundante testado e funcional (failover de link testado com queda real do circuito primário)
+Ponto único de política de firewall/segmentação, antes inexistente
+Base de configuração em motor atualmente suportado (fim de dependência de pacote legado)
